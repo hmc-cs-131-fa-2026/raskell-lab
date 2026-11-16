@@ -1,0 +1,2 @@
+; expect: a
+(first '(a b c))

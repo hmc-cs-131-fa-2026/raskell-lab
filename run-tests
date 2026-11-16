@@ -1,0 +1,89 @@
+#!/bin/bash
+# Run the Raskell tests.
+#
+#   ./run-tests              run every test
+#   ./run-tests 02           run only the stages whose folder name starts with 02
+#   ./run-tests > testing.log   save the results to submit
+#   ./run-tests --reference  run the tests with the course's reference
+#                            interpreter (rask-reference) instead of yours
+#   ./run-tests --reference 05   ...just stage 05, with the reference
+#
+# Each test is a .rask file in a folder under tests/. Its first lines say what
+# to run and what to expect:
+#
+#   ; expect: (b c)          the exact output expected
+#   ; expect: error          any error message ("error: ...") counts as passing,
+#                            except "not implemented yet"
+#   ; run: --lib rasklib/list-library.rask --file THIS
+#                            optional: the arguments to give ./rask
+#                            (THIS means this test file; the default is --file THIS)
+
+cd "$(dirname "$0")" || exit 1
+
+rask=./rask
+if [[ "${1:-}" == "--reference" ]]; then
+    rask=rask-reference
+    shift
+    if ! command -v rask-reference >/dev/null 2>&1; then
+        echo "rask-reference isn't installed here. Run this on cs131.cs.hmc.edu."
+        exit 1
+    fi
+    echo "(Using the REFERENCE interpreter, rask-reference, not your code.)"
+    echo
+fi
+
+# Compile once, up front (the rask script recompiles only if needed).
+if [[ "$rask" == ./rask ]] && ! ./rask --file /dev/null >/dev/null 2>.build-errors; then
+    echo "COMPILE ERROR: Raskell did not compile. ghc said:"
+    cat .build-errors
+    rm -f .build-errors
+    exit 1
+fi
+rm -f .build-errors
+
+filter="${1:-}"
+total_pass=0
+total_fail=0
+summary=""
+
+for stage in tests/*/; do
+    stage=${stage%/}
+    name=${stage#tests/}
+    [[ -n "$filter" && "$name" != "$filter"* ]] && continue
+    pass=0; fail=0
+    echo "=== $name ==="
+    for t in "$stage"/*.rask; do
+        expect=$(grep -m1 '^; expect:' "$t" | sed 's/^; expect: *//')
+        run=$(grep -m1 '^; run:' "$t" | sed 's/^; run: *//')
+        [[ -z "$run" ]] && run="--file THIS"
+        run=${run//THIS/$t}
+        # shellcheck disable=SC2086
+        actual=$(timeout 10 $rask $run 2>&1)
+        status=$?
+        [[ $status -eq 124 ]] && actual="(timed out after 10 seconds)"
+        label="$name/$(basename "$t" .rask)"
+        if [[ "$expect" == "error" && "$actual" == error:* && "$actual" != *"not implemented yet"* ]] || [[ "$expect" != "error" && "$actual" == "$expect" ]]; then
+            echo "PASS  $label"
+            pass=$((pass + 1))
+        else
+            echo "FAIL  $label"
+            echo "        program:  $(grep -v '^;' "$t" | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')"
+            [[ "$run" != "--file $t" ]] && echo "        run:      $rask $run"
+            if [[ "$expect" == "error" ]]; then
+                echo "        expected: an error message (error: ...)"
+            else
+                echo "        expected: $expect"
+            fi
+            echo "        got:      $actual"
+            fail=$((fail + 1))
+        fi
+    done
+    total_pass=$((total_pass + pass)); total_fail=$((total_fail + fail))
+    summary+=$(printf '  %-22s %3d / %3d passed' "$name" "$pass" "$((pass + fail))")$'\n'
+    echo
+done
+
+echo "=== Summary ==="
+printf '%s' "$summary"
+echo "  TOTAL                  $total_pass / $((total_pass + total_fail)) passed"
+[[ $total_fail -eq 0 ]]

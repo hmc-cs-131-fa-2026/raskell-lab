@@ -1,0 +1,2 @@
+; expect: (b a)
+((lambda (x y) (cons y (cons x '()))) 'a 'b)

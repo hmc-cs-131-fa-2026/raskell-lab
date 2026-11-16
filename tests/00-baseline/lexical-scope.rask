@@ -1,0 +1,2 @@
+; expect: (outer inner)
+(((lambda (x) (lambda (y) (cons x (cons y '())))) 'outer) 'inner)

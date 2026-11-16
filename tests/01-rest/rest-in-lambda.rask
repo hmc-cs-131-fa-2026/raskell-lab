@@ -1,0 +1,2 @@
+; expect: (c)
+((lambda (xs) (rest (rest xs))) '(a b c))

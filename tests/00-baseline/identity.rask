@@ -1,0 +1,2 @@
+; expect: apple
+((lambda (x) x) 'apple)

@@ -1,0 +1,2 @@
+; expect: (cons a b)
+'(cons a b)

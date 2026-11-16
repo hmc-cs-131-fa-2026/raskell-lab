@@ -1,0 +1,2 @@
+; expect: (b c)
+(rest '(a b c))

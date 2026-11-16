@@ -1,0 +1,2 @@
+; The identity function, applied to a symbol.
+((lambda (x) x) 'apple)

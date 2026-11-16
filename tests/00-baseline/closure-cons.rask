@@ -1,0 +1,2 @@
+; expect: (cat)
+((lambda (x) (cons x '())) 'cat)

@@ -1,0 +1,15 @@
+#!/bin/sh
+# Run Raskell. With no arguments, starts the REPL; otherwise passes the
+# arguments (--file, --lib, numbers) through. Recompiles first if any .hs
+# file is newer than the compiled interpreter.
+dir=$(cd "$(dirname "$0")" && pwd)
+bin="$dir/.build/raskell"
+if [ ! -x "$bin" ] || [ -n "$(find "$dir" -maxdepth 1 -name '*.hs' -newer "$bin")" ]; then
+    echo "(compiling Raskell...)" >&2
+    mkdir -p "$dir/.build"
+    (cd "$dir" && ghc -O0 -v0 -outputdir .build -o .build/raskell Rask.hs) || exit 1
+fi
+if [ $# -eq 0 ] && command -v rlwrap >/dev/null 2>&1; then
+    exec rlwrap "$bin"
+fi
+exec "$bin" "$@"

@@ -1,0 +1,3 @@
+; Builds a one-element list. Part 2 of the lab traces this program.
+((lambda (x) (cons x '()))
+ 'cat)

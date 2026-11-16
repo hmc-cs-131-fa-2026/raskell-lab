@@ -1,0 +1,4 @@
+; Lexical scope: the inner function remembers x from where it was made.
+(((lambda (x) (lambda (y) (cons x (cons y '()))))
+  'outer)
+ 'inner)

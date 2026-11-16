@@ -1,0 +1,4 @@
+; A function of two arguments that returns them in the opposite order.
+((lambda (x y) (cons y (cons x '())))
+ 'left
+ 'right)
