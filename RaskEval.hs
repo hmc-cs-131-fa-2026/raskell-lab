@@ -36,8 +36,7 @@ initEnv = Map.fromList [ (name, VPrim name f) | (name, f) <- primitives ]
 -- Evaluation
 --------------------------------------------------------------------------------
 
--- | Evaluate an expression in an environment, producing a value. If the
--- program is wrong, evaluation stops with an error message.
+-- | Evaluate an expression in an environment, producing a value.
 eval :: Env -> SExpr -> Value
 
 -- Numbers and Booleans evaluate to themselves.
@@ -66,7 +65,8 @@ apply :: Value -> [Value] -> Value
 apply (VPrim _ f) args = f args
 apply (VClosure closureEnv params body) args
     | length params /= length args =
-        error (arityMessage "procedure" (length params) (length args))
+        error ("procedure: expected " ++ show (length params)
+               ++ " arguments, got " ++ show (length args))
     | otherwise =
         eval (envExtend params args closureEnv) body
 apply notAFunction _ =
@@ -74,23 +74,25 @@ apply notAFunction _ =
 
 --------------------------------------------------------------------------------
 -- Special forms
+--
+-- Each one receives its parts UNEVALUATED, as a list of SExprs.
 --------------------------------------------------------------------------------
 
 -- | (quote e): return e as data, without evaluating it.
 evalQuote :: [SExpr] -> Value
 evalQuote [e] = quoteToValue e
-evalQuote es  = error (arityMessage "quote" 1 (length es))
 
 -- | (lambda (params...) body): make a closure that remembers the CURRENT
 -- environment (that's what makes scope lexical).
 evalLambda :: Env -> [SExpr] -> Value
-evalLambda env [paramList, body] = VClosure env (parameterList paramList) body
-evalLambda _ _ = error "lambda: expected (lambda (params...) body)"
+evalLambda env [SList params, body] = VClosure env (map symbolName params) body
 
 --------------------------------------------------------------------------------
 -- Primitive operations
 --
 -- Each primitive receives its arguments ALREADY EVALUATED, as a list of values.
+-- It only needs an equation for arguments of the right shape. Anything else
+-- matches no equation, and Raskell reports that as an error.
 --------------------------------------------------------------------------------
 
 -- | Every primitive, by the name a Raskell program uses for it.
@@ -103,16 +105,11 @@ primitives =
 
 -- | (cons x xs): a new list whose first element is x and the rest is xs.
 primCons :: [Value] -> Value
-primCons [x, xs] = VList (x : expectList "cons" xs)
-primCons args    = error (arityMessage "cons" 2 (length args))
+primCons [x, VList xs] = VList (x : xs)
 
 -- | (first xs): the first element of a nonempty list.
 primFirst :: [Value] -> Value
-primFirst [xs] =
-    case expectList "first" xs of
-        (x : _) -> x
-        []      -> error "first: expected a nonempty list, got ()"
-primFirst args = error (arityMessage "first" 1 (length args))
+primFirst [VList (x : _)] = x
 
 -- | (rest xs): everything after the first element of a nonempty list.
 --

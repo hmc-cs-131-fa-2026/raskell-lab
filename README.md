@@ -9,7 +9,7 @@ Raskell is a small, Racket-like language. This repository holds its interpreter,
 | File | What it is |
 |---|---|
 | `RaskEval.hs` | The evaluator. **The one file you edit:** implement `primRest` (search for `TODO`). |
-| `RaskAST.hs` | The two datatypes: `SExpr` (syntax, before evaluation) and `Value` (what evaluation produces), plus printing and helpers for checking arguments. |
+| `RaskAST.hs` | The two datatypes: `SExpr` (syntax, before evaluation) and `Value` (what evaluation produces), plus printing. |
 | `RaskParser.hs` | Turns source text into an `SExpr`. |
 | `Rask.hs` | The REPL and the file runner. |
 | `ParserCombinators.hs`, `ParserBase.hs` | **PROVIDED: DO NOT EDIT.** The course's parser-combinator library (the same one you used for piq). |

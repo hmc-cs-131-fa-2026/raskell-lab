@@ -8,6 +8,7 @@ if [ ! -x "$bin" ] || [ -n "$(find "$dir" -maxdepth 1 -name '*.hs' -newer "$bin"
     echo "(compiling Raskell...)" >&2
     mkdir -p "$dir/.build"
     (cd "$dir" && ghc -O0 -v0 -outputdir .build -o .build/raskell Rask.hs) || exit 1
+    touch "$bin"   # ghc skips relinking when nothing changed; mark it fresh anyway
 fi
 if [ $# -eq 0 ] && command -v rlwrap >/dev/null 2>&1; then
     exec rlwrap "$bin"

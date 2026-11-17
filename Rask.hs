@@ -27,6 +27,7 @@ module Main where
 
 import           Control.Exception  (ArithException, ErrorCall (..), Handler (..),
                                      PatternMatchFail, catches, evaluate, try)
+import           Data.List          (isPrefixOf, tails)
 import qualified Data.Map           as Map
 import           System.Environment (getArgs, getProgName)
 import           System.Exit        (exitFailure)
@@ -104,8 +105,8 @@ showResult (Right v)  = showValue v
 --------------------------------------------------------------------------------
 
 -- | Finish computing a value. If the interpreter stopped with an error
--- (Haskell's @error@, a missing pattern, or division by zero), turn it into an
--- ordinary Left so the REPL keeps running.
+-- (a missing pattern, Haskell's @error@, or division by zero), turn it into
+-- an ordinary Left so the REPL keeps running.
 safeEval :: Value -> IO (Either String Value)
 safeEval v = safely (evaluate (forceValue v))
 
@@ -114,9 +115,18 @@ safely :: IO a -> IO (Either String a)
 safely action =
     (Right <$> action) `catches`
         [ Handler (\(ErrorCall msg) -> return (Left msg))
-        , Handler (\e -> return (Left (show (e :: PatternMatchFail))))
+        , Handler (\e -> return (Left (patternMessage (show (e :: PatternMatchFail)))))
         , Handler (\e -> return (Left (show (e :: ArithException))))
         ]
+
+-- | GHC's message for a missing pattern starts with a source location, such as
+-- "RaskEval.hs:(120,1)-(121,40): Non-exhaustive patterns in function primRest".
+-- Keep just the part after the location.
+patternMessage :: String -> String
+patternMessage msg =
+    case [ s | s <- tails msg, "Non-exhaustive" `isPrefixOf` s ] of
+        (s : _) -> takeWhile (/= '\n') s
+        []      -> msg
 
 --------------------------------------------------------------------------------
 -- Running a file
@@ -143,10 +153,13 @@ loadLibrary file = do
     case parsed of
         Left msg -> failWith msg
         Right e  -> do
-            pairs <- safely (evaluate (forceSpine (bindingList "library" e)))
-            case pairs of
-                Left msg -> failWith msg
-                Right ps -> defineAll initEnv ps
+            case e of
+                SList defs -> do
+                    pairs <- safely (evaluate (definitions defs))
+                    case pairs of
+                        Left msg -> failWith msg
+                        Right ps -> defineAll initEnv ps
+                _ -> failWith "expected one parenthesized list of (name expression) definitions"
   where
     failWith msg = hPutStrLn stderr ("error in library " ++ file ++ ": " ++ msg) >> exitFailure
 
@@ -157,9 +170,17 @@ loadLibrary file = do
             Left msg -> failWith msg
             Right v  -> defineAll (Map.insert name v env) rest
 
+    -- Each definition must look like (name expression).
+    definitions defs = foldr seq () pairs `seq` pairs
+      where
+        pairs = map definition defs
+        definition (SList [SSymbol name, d]) = (name, d)
+        definition other = error ("bad definition " ++ showSExpr other
+                                  ++ " (expected (name expression))")
+
     -- A lambda can call itself, as if bound by letrec.
-    define env name (SList [SSymbol "lambda", paramList, body]) =
-        let closure = VClosure (Map.insert name closure env) (parameterList paramList) body
+    define env name (SList [SSymbol "lambda", SList params, body]) =
+        let closure = VClosure (Map.insert name closure env) (map symbolName params) body
         in  closure
     define env _ e = eval env e
 
