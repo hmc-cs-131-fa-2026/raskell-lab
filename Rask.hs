@@ -25,8 +25,8 @@ the library's names in it.
 -}
 module Main where
 
-import           Control.Exception  (ErrorCall (..), evaluate, try)
-import           Control.Monad      (foldM)
+import           Control.Exception  (ArithException, ErrorCall (..), Handler (..),
+                                     PatternMatchFail, catches, evaluate, try)
 import qualified Data.Map           as Map
 import           System.Environment (getArgs, getProgName)
 import           System.Exit        (exitFailure)
@@ -100,6 +100,25 @@ showResult (Left msg) = "error: " ++ msg
 showResult (Right v)  = showValue v
 
 --------------------------------------------------------------------------------
+-- Evaluating safely
+--------------------------------------------------------------------------------
+
+-- | Finish computing a value. If the interpreter stopped with an error
+-- (Haskell's @error@, a missing pattern, or division by zero), turn it into an
+-- ordinary Left so the REPL keeps running.
+safeEval :: Value -> IO (Either String Value)
+safeEval v = safely (evaluate (forceValue v))
+
+-- | Run an action, turning an interpreter error into a Left.
+safely :: IO a -> IO (Either String a)
+safely action =
+    (Right <$> action) `catches`
+        [ Handler (\(ErrorCall msg) -> return (Left msg))
+        , Handler (\e -> return (Left (show (e :: PatternMatchFail))))
+        , Handler (\e -> return (Left (show (e :: ArithException))))
+        ]
+
+--------------------------------------------------------------------------------
 -- Running a file
 --------------------------------------------------------------------------------
 
@@ -109,33 +128,40 @@ runFile env file numbers = do
     parsed <- safeParse source
     case parsed of
         Left msg -> putStrLn ("error: " ++ msg)
-        Right e  ->
-            case (eval env e, numbers) of
-                (result, []) -> putStrLn (showResult result)
-                (Right f, ns) -> mapM_ (\n -> putStrLn (showResult (apply f [VNumber n]))) ns
-                (failed, _)  -> putStrLn (showResult failed)
+        Right e  -> do
+            result <- safeEval (eval env e)
+            case (result, numbers) of
+                (_, [])       -> putStrLn (showResult result)
+                (Right f, ns) -> mapM_ (\n -> safeEval (apply f [VNumber n]) >>= putStrLn . showResult) ns
+                (failed, _)   -> putStrLn (showResult failed)
 
 -- | Load a library file of definitions on top of an environment.
 loadLibrary :: FilePath -> IO Env
 loadLibrary file = do
     source <- readFile file
     parsed <- safeParse source
-    let result = do
-            e     <- parsed
-            pairs <- bindingList "library" e
-            foldM define initEnv pairs
-    case result of
-        Left msg  -> hPutStrLn stderr ("error in library " ++ file ++ ": " ++ msg) >> exitFailure
-        Right env -> return env
+    case parsed of
+        Left msg -> failWith msg
+        Right e  -> do
+            pairs <- safely (evaluate (forceSpine (bindingList "library" e)))
+            case pairs of
+                Left msg -> failWith msg
+                Right ps -> defineAll initEnv ps
   where
-    define env (name, SList [SSymbol "lambda", paramList, body]) = do
-        params <- parameterList paramList
-        let closure = VClosure env' params body
-            env'    = Map.insert name closure env
-        return env'
-    define env (name, e) = do
-        v <- eval env e
-        return (Map.insert name v env)
+    failWith msg = hPutStrLn stderr ("error in library " ++ file ++ ": " ++ msg) >> exitFailure
+
+    defineAll env [] = return env
+    defineAll env ((name, d) : rest) = do
+        result <- safeEval (define env name d)
+        case result of
+            Left msg -> failWith msg
+            Right v  -> defineAll (Map.insert name v env) rest
+
+    -- A lambda can call itself, as if bound by letrec.
+    define env name (SList [SSymbol "lambda", paramList, body]) =
+        let closure = VClosure (Map.insert name closure env) (parameterList paramList) body
+        in  closure
+    define env _ e = eval env e
 
 --------------------------------------------------------------------------------
 -- The REPL: read, evaluate, print, loop
@@ -161,9 +187,9 @@ repl env = do
               | null (trimmed line)                -> loop prompt
               | otherwise -> do
                     parsed <- safeParse line
-                    putStrLn $ case parsed of
-                        Left msg -> "error: " ++ msg
-                        Right e  -> showResult (eval env e)
+                    case parsed of
+                        Left msg -> putStrLn ("error: " ++ msg)
+                        Right e  -> safeEval (eval env e) >>= putStrLn . showResult
                     loop prompt
 
     -- Keep reading lines until the parentheses balance, so an expression can

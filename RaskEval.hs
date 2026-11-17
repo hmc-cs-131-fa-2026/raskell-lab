@@ -16,12 +16,12 @@ import qualified Data.Map as Map
 -- Environments
 --------------------------------------------------------------------------------
 
--- | Look up a name, or explain that it isn't bound.
-envLookup :: String -> Env -> Either String Value
+-- | Look up a name, or stop with an error if it isn't bound.
+envLookup :: String -> Env -> Value
 envLookup name env =
     case Map.lookup name env of
-        Just v  -> Right v
-        Nothing -> Left ("unbound identifier: " ++ name)
+        Just v  -> v
+        Nothing -> error ("unbound identifier: " ++ name)
 
 -- | Bind several names to several values, on top of an existing environment.
 -- (New bindings shadow old ones with the same name.)
@@ -36,19 +36,19 @@ initEnv = Map.fromList [ (name, VPrim name f) | (name, f) <- primitives ]
 -- Evaluation
 --------------------------------------------------------------------------------
 
--- | Evaluate an expression in an environment, producing either an error
--- message (Left) or a value (Right).
-eval :: Env -> SExpr -> Either String Value
+-- | Evaluate an expression in an environment, producing a value. If the
+-- program is wrong, evaluation stops with an error message.
+eval :: Env -> SExpr -> Value
 
 -- Numbers and Booleans evaluate to themselves.
-eval _   (SNumber n) = Right (VNumber n)
-eval _   (SBool b)   = Right (VBool b)
+eval _   (SNumber n) = VNumber n
+eval _   (SBool b)   = VBool b
 
 -- A symbol, when evaluated, is a variable: look it up.
 eval env (SSymbol name) = envLookup name env
 
 -- () is not a valid expression (quote it to get the empty list).
-eval _   (SList []) = Left "empty application: () (did you mean '()?)"
+eval _   (SList []) = error "empty application: () (did you mean '()?)"
 
 -- Special forms: each has its own evaluation rule.
 eval _   (SList (SSymbol "quote"  : parts)) = evalQuote  parts
@@ -56,38 +56,36 @@ eval env (SList (SSymbol "lambda" : parts)) = evalLambda env parts
 
 -- Anything else in parentheses is an ordinary application: evaluate the
 -- function and ALL the arguments (call by value), then apply.
-eval env (SList (fexpr : argexprs)) = do
-    f    <- eval env fexpr
-    args <- mapM (eval env) argexprs
-    apply f args
+-- (forceValue and forceAll, from RaskAST.hs, make Haskell finish computing
+-- them before the call. You don't need to read how they work.)
+eval env (SList (fexpr : argexprs)) =
+    apply (forceValue (eval env fexpr)) (forceAll (map (eval env) argexprs))
 
 -- | Apply a function value to already-evaluated arguments.
-apply :: Value -> [Value] -> Either String Value
+apply :: Value -> [Value] -> Value
 apply (VPrim _ f) args = f args
 apply (VClosure closureEnv params body) args
     | length params /= length args =
-        Left (arityMessage "procedure" (length params) (length args))
+        error (arityMessage "procedure" (length params) (length args))
     | otherwise =
         eval (envExtend params args closureEnv) body
 apply notAFunction _ =
-    Left ("not a procedure: " ++ showValue notAFunction)
+    error ("not a procedure: " ++ showValue notAFunction)
 
 --------------------------------------------------------------------------------
 -- Special forms
 --------------------------------------------------------------------------------
 
 -- | (quote e): return e as data, without evaluating it.
-evalQuote :: [SExpr] -> Either String Value
-evalQuote [e] = Right (quoteToValue e)
-evalQuote es  = Left (arityMessage "quote" 1 (length es))
+evalQuote :: [SExpr] -> Value
+evalQuote [e] = quoteToValue e
+evalQuote es  = error (arityMessage "quote" 1 (length es))
 
 -- | (lambda (params...) body): make a closure that remembers the CURRENT
 -- environment (that's what makes scope lexical).
-evalLambda :: Env -> [SExpr] -> Either String Value
-evalLambda env [paramList, body] = do
-    params <- parameterList paramList
-    return (VClosure env params body)
-evalLambda _ _ = Left "lambda: expected (lambda (params...) body)"
+evalLambda :: Env -> [SExpr] -> Value
+evalLambda env [paramList, body] = VClosure env (parameterList paramList) body
+evalLambda _ _ = error "lambda: expected (lambda (params...) body)"
 
 --------------------------------------------------------------------------------
 -- Primitive operations
@@ -96,7 +94,7 @@ evalLambda _ _ = Left "lambda: expected (lambda (params...) body)"
 --------------------------------------------------------------------------------
 
 -- | Every primitive, by the name a Raskell program uses for it.
-primitives :: [(String, [Value] -> Either String Value)]
+primitives :: [(String, [Value] -> Value)]
 primitives =
     [ ("cons",  primCons)
     , ("first", primFirst)
@@ -104,20 +102,17 @@ primitives =
     ]
 
 -- | (cons x xs): a new list whose first element is x and the rest is xs.
-primCons :: [Value] -> Either String Value
-primCons args = do
-    (x, xsv) <- twoArgs "cons" args
-    xs <- expectList "cons" xsv
-    return (VList (x : xs))
+primCons :: [Value] -> Value
+primCons [x, xs] = VList (x : expectList "cons" xs)
+primCons args    = error (arityMessage "cons" 2 (length args))
 
 -- | (first xs): the first element of a nonempty list.
-primFirst :: [Value] -> Either String Value
-primFirst args = do
-    xsv <- oneArg "first" args
-    xs  <- expectList "first" xsv
-    case xs of
-        (x : _) -> Right x
-        []      -> Left "first: expected a nonempty list, got ()"
+primFirst :: [Value] -> Value
+primFirst [xs] =
+    case expectList "first" xs of
+        (x : _) -> x
+        []      -> error "first: expected a nonempty list, got ()"
+primFirst args = error (arityMessage "first" 1 (length args))
 
 -- | (rest xs): everything after the first element of a nonempty list.
 --
@@ -127,5 +122,5 @@ primFirst args = do
 --   (rest 'a)        is an error
 --
 -- TODO (Lab 09): replace the line below with a real implementation.
-primRest :: [Value] -> Either String Value
-primRest _ = Left "rest: not implemented yet"
+primRest :: [Value] -> Value
+primRest _ = error "rest: not implemented yet"

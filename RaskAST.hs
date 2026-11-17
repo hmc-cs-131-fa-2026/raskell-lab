@@ -3,6 +3,9 @@ Module      : RaskAST
 Description : The two datatypes at the heart of Raskell: syntax (SExpr) and
               runtime values (Value), plus printing and small helpers.
 
+Errors: when a Raskell program is wrong, the interpreter calls Haskell's
+@error@ with a message. The REPL catches it and prints @error: ...@.
+
 PROVIDED. You will read this file often, but you shouldn't need to change it.
 -}
 module RaskAST where
@@ -47,7 +50,7 @@ data Value
     | VList    [Value]                    -- ^ a proper list of values; @VList []@ is the empty list
     | VClosure Env [String] SExpr         -- ^ a function written in Raskell: its defining
                                           --   environment, its parameter names, and its body
-    | VPrim    String ([Value] -> Either String Value)
+    | VPrim    String ([Value] -> Value)
                                           -- ^ a primitive written in Haskell: its name and
                                           --   what it does to a list of (already evaluated) arguments
 
@@ -86,39 +89,30 @@ quoteToValue (SBool b)   = VBool b
 quoteToValue (SList es)  = VList (map quoteToValue es)
 
 --------------------------------------------------------------------------------
--- Helpers for checking arguments
+-- Helpers for checking values
 --
--- Each helper either extracts what you asked for (Right) or explains what went
--- wrong (Left). The String argument is the name of the operation, so error
--- messages can say which operation failed.
+-- Each helper either returns what you asked for, or stops the program with an
+-- error message. The String argument is the name of the operation, so the
+-- message can say which operation failed.
 --------------------------------------------------------------------------------
 
 -- | Check that a value is a number, and extract it.
-expectNumber :: String -> Value -> Either String Integer
-expectNumber _ (VNumber n) = Right n
-expectNumber op v          = Left (op ++ ": expected a number, got " ++ showValue v)
+expectNumber :: String -> Value -> Integer
+expectNumber _ (VNumber n) = n
+expectNumber op v          = error (op ++ ": expected a number, got " ++ showValue v)
 
 -- | Check that a value is a Boolean, and extract it.
-expectBool :: String -> Value -> Either String Bool
-expectBool _ (VBool b) = Right b
-expectBool op v        = Left (op ++ ": expected a Boolean, got " ++ showValue v)
+expectBool :: String -> Value -> Bool
+expectBool _ (VBool b) = b
+expectBool op v        = error (op ++ ": expected a Boolean, got " ++ showValue v)
 
 -- | Check that a value is a list, and extract its elements.
-expectList :: String -> Value -> Either String [Value]
-expectList _ (VList vs) = Right vs
-expectList op v         = Left (op ++ ": expected a list, got " ++ showValue v)
-
--- | Check that an operation received exactly one argument, and extract it.
-oneArg :: String -> [Value] -> Either String Value
-oneArg _  [v] = Right v
-oneArg op vs  = Left (arityMessage op 1 (length vs))
-
--- | Check that an operation received exactly two arguments, and extract them.
-twoArgs :: String -> [Value] -> Either String (Value, Value)
-twoArgs _  [v1, v2] = Right (v1, v2)
-twoArgs op vs       = Left (arityMessage op 2 (length vs))
+expectList :: String -> Value -> [Value]
+expectList _ (VList vs) = vs
+expectList op v         = error (op ++ ": expected a list, got " ++ showValue v)
 
 -- | The error message for calling something with the wrong number of arguments.
+-- For example, @arityMessage "rest" 1 2@ is @"rest: expected 1 argument, got 2"@.
 arityMessage :: String -> Int -> Int -> String
 arityMessage op expected actual =
     op ++ ": expected " ++ plural expected "argument" ++ ", got " ++ show actual
@@ -132,20 +126,50 @@ arityMessage op expected actual =
 
 -- | Read the binding list of a @let@ or @letrec@, such as @((x 1) (y (+ 2 3)))@,
 -- into pairs of a name and the (unevaluated) expression it is bound to.
-bindingList :: String -> SExpr -> Either String [(String, SExpr)]
-bindingList form (SList bindings) = mapM binding bindings
+bindingList :: String -> SExpr -> [(String, SExpr)]
+bindingList form (SList bindings) = forceSpine (map binding bindings)
   where
-    binding (SList [SSymbol name, e]) = Right (name, e)
-    binding other = Left (form ++ ": bad binding " ++ showSExpr other
-                          ++ " (expected (name expression))")
+    binding (SList [SSymbol name, e]) = (name, e)
+    binding other = error (form ++ ": bad binding " ++ showSExpr other
+                           ++ " (expected (name expression))")
 bindingList form other =
-    Left (form ++ ": expected a list of bindings, got " ++ showSExpr other)
+    error (form ++ ": expected a list of bindings, got " ++ showSExpr other)
 
 -- | Read the parameter list of a @lambda@, such as @(x y)@, into names.
-parameterList :: SExpr -> Either String [String]
-parameterList (SList params) = mapM param params
+parameterList :: SExpr -> [String]
+parameterList (SList params) = forceSpine (map param params)
   where
-    param (SSymbol name) = Right name
-    param other = Left ("lambda: parameter is not a symbol: " ++ showSExpr other)
+    param (SSymbol name) = name
+    param other = error ("lambda: parameter is not a symbol: " ++ showSExpr other)
 parameterList other =
-    Left ("lambda: expected a parameter list, got " ++ showSExpr other)
+    error ("lambda: expected a parameter list, got " ++ showSExpr other)
+
+--------------------------------------------------------------------------------
+-- Making errors happen on time
+--
+-- You don't need to read this section. Haskell is lazy: it doesn't compute
+-- anything until it's needed. Raskell is NOT lazy. It evaluates every argument
+-- before a call, so an error in an argument must stop the program even if the
+-- function never uses that argument. These helpers make Haskell finish
+-- computing a value right away, so any error inside it happens right away too.
+--------------------------------------------------------------------------------
+
+-- | Fully compute a value (but not a closure's environment or body, which may
+-- refer to the closure itself).
+forceValue :: Value -> Value
+forceValue v = check v `seq` v
+  where
+    check (VNumber n)          = n `seq` ()
+    check (VBool b)            = b `seq` ()
+    check (VSymbol s)          = length s `seq` ()
+    check (VList vs)           = foldr (\x rest -> check x `seq` rest) () vs
+    check (VClosure _ ps _)    = foldr (\p rest -> length p `seq` rest) () ps
+    check (VPrim name _)       = length name `seq` ()
+
+-- | Fully compute every value in a list, in order.
+forceAll :: [Value] -> [Value]
+forceAll vs = foldr (\v rest -> forceValue v `seq` rest) () vs `seq` vs
+
+-- | Compute every element of a list, in order (one level deep).
+forceSpine :: [a] -> [a]
+forceSpine xs = foldr seq () xs `seq` xs
